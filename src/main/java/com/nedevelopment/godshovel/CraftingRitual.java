@@ -3,6 +3,8 @@ package com.nedevelopment.godshovel;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Particle;
+import org.bukkit.Color;
 import org.bukkit.Sound;
 import org.bukkit.entity.BlockDisplay;
 import org.bukkit.entity.ItemDisplay;
@@ -122,6 +124,26 @@ public class CraftingRitual {
                     }
                     centerLoc.getWorld().playSound(centerLoc, Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 1f, 0.8f);
                 }
+
+                                // --- EXTRA PHASE: Perfect Centered Red Beam (60 to 200 Ticks) ---
+                if (ticks >= 60 && ticks < 200) {
+                    Particle.DustOptions redBeam = new Particle.DustOptions(Color.RED, 2.5f);
+                    
+                    // X aur Z ko ekdum absolute center par lock kar diya hai taaki beam hile na
+                    double exactX = centerLoc.getX();
+                    double exactZ = centerLoc.getZ();
+                    
+                    // Y axis shovel ke sath upar aayega
+                    double exactY = (glowingShovel != null) ? glowingShovel.getLocation().getY() : currentShriekerLoc.getY() + 1.0;
+                    
+                    Location beamStart = new Location(centerLoc.getWorld(), exactX, exactY, exactZ);
+                    
+                    // 30 block upar tak straight red beam
+                    for (double y = 0; y <= 30; y += 0.5) {
+                        centerLoc.getWorld().spawnParticle(Particle.DUST, beamStart.clone().add(0, y, 0), 1, redBeam);
+                    }
+                }
+                
 
                 // Keep updating Shrieker's location and rotation till the very end
                 if (ticks < 200) {
