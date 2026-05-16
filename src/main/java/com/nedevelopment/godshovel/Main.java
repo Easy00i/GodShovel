@@ -1,80 +1,152 @@
 package com.nedevelopment.godshovel;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.CraftItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public class Main extends JavaPlugin implements Listener {
 
-    private boolean maceCrafted = false;
-    private boolean eggFound = false;
+    private DataManager dataManager;
 
     @Override
     public void onEnable() {
+        // 1. Config and Data File Initialization
         saveDefaultConfig();
-        maceCrafted = getConfig().getBoolean("mace_crafted", false);
-        eggFound = getConfig().getBoolean("egg_found", false);
-        
+        this.dataManager = new DataManager(this);
+
+        // 2. Register Events/Listeners
         getServer().getPluginManager().registerEvents(this, this);
         getServer().getPluginManager().registerEvents(new PowerListeners(this), this);
-        getCommand("giveshovel").setExecutor(new CommandHandler(this));
-        
-        // Start the passive aura and effect task
+        getServer().getPluginManager().registerEvents(new CombatListener(), this);
+
+        // 3. Register Command & Tab Completer
+        CommandHandler commandHandler = new CommandHandler(this);
+        if (getCommand("giveshovel") != null) {
+            getCommand("giveshovel").setExecutor(commandHandler);
+            getCommand("giveshovel").setTabCompleter(commandHandler);
+        }
+
+        // 4. Start Passive Particle & Aura Task (Runs every 2 ticks)
         new PassivePowerTask(this).runTaskTimer(this, 0L, 2L);
+
+        // 5. Register God Shovel Custom Recipe
+        registerGodShovelRecipe();
+        
+        getLogger().info("§aGodShovel Plugin successfully loaded without bugs!");
     }
 
-    // --- MACE CRAFTING LOGIC ---
-    @EventHandler
-    public void onCraft(CraftItemEvent event) {
+    @Override
+    public void onDisable() {
+        getLogger().info("§cGodShovel Plugin stopped.");
+    }
+
+    /**
+     * God Shovel ki custom recipe setup:
+     * Dragon Egg, Mace, Diamond Block, Netherite Ingot, aur Wooden Shovel.
+     */
+    private void registerGodShovelRecipe() {
+        NamespacedKey key = new NamespacedKey(this, "god_shovel_recipe");
+        
+        // Custom item result output definition
+        ShapedRecipe recipe = new ShapedRecipe(key, ItemManager.getGodShovel());
+        
+        // Matrix Shape: Top -> Mid -> Bottom
+        recipe.shape(
+                " E ",
+                "NMD",
+                " S "
+        );
+
+        recipe.setIngredient('E', Material.DRAGON_EGG);
+        recipe.setIngredient('M', Material.MACE);
+        recipe.setIngredient('N', Material.NETHERITE_INGOT);
+        recipe.setIngredient('D', Material.DIAMOND_BLOCK);
+        recipe.setIngredient('S', Material.WOODEN_SHOVEL);
+
+        // Duplicate override protection
+        if (Bukkit.getRecipe(key) == null) {
+            Bukkit.addRecipe(recipe);
+        }
+    }
+
+    // --- MACE SINGLE-CRAFT TRACKING LOGIC ---
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onMaceCraft(CraftItemEvent event) {
         if (event.getRecipe().getResult().getType() == Material.MACE) {
-            if (maceCrafted) {
+            if (dataManager.isMaceCrafted()) {
                 event.setCancelled(true);
                 event.getWhoClicked().sendMessage("§cServer mein Mace pehle hi craft ho chuka hai! Ab dubara nahi ho sakta.");
                 return;
             }
-            // First time craft
-            maceCrafted = true;
-            getConfig().set("mace_crafted", true);
-            saveConfig();
             
+            dataManager.setMaceCrafted(true);
             Player player = (Player) event.getWhoClicked();
+            
             for (Player p : Bukkit.getOnlinePlayers()) {
                 p.sendTitle("§6§lMACE CRAFTED!", "§e" + player.getName() + " crafted the first Mace!", 10, 70, 20);
             }
         }
     }
 
-    // --- DRAGON EGG LOGIC ---
+    // --- GOD SHOVEL CRAFTING RITUAL TRIGGER ---
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onGodShovelCraft(CraftItemEvent event) {
+        ItemStack result = event.getRecipe().getResult();
+        if (ItemManager.isGodShovel(result)) {
+            event.setCancelled(true); // Inventory click cancel taaki direct hath me na aaye
+            
+            Player player = (Player) event.getWhoClicked();
+            Location tableLoc = event.getInventory().getLocation();
+            
+            if (tableLoc != null && tableLoc.getBlock().getType() == Material.CRAFTING_TABLE) {
+                // Crafting matrix items ko clear/consume karne ka safe tareeka
+                event.getInventory().clear();
+                player.closeInventory();
+                
+                // Start the 10-second advanced Sculk Shrieker animation ritual
+                CraftingRitual.startRitual(this, player, tableLoc);
+            }
+        }
+    }
+
+    // --- DRAGON EGG FIRST PICKUP LOGIC ---
     @EventHandler
-    public void onPickup(EntityPickupItemEvent event) {
+    public void onEggPickup(EntityPickupItemEvent event) {
         if (event.getEntity() instanceof Player player) {
-            if (event.getItem().getItemStack().getType() == Material.DRAGON_EGG && !eggFound) {
+            if (event.getItem().getItemStack().getType() == Material.DRAGON_EGG && !dataManager.isEggFound()) {
                 triggerEggAnnouncement(player);
             }
         }
     }
 
     @EventHandler
-    public void onInventoryClick(InventoryClickEvent event) {
-        if (event.getCurrentItem() != null && event.getCurrentItem().getType() == Material.DRAGON_EGG && !eggFound) {
-            triggerEggAnnouncement((Player) event.getWhoClicked());
+    public void onEggInventoryClick(InventoryClickEvent event) {
+        if (event.getCurrentItem() != null && event.getCurrentItem().getType() == Material.DRAGON_EGG && !dataManager.isEggFound()) {
+            if (event.getWhoClicked() instanceof Player player) {
+                triggerEggAnnouncement(player);
+            }
         }
     }
 
     private void triggerEggAnnouncement(Player player) {
-        eggFound = true;
-        getConfig().set("egg_found", true);
-        saveConfig();
+        dataManager.setEggFound(true);
         for (Player p : Bukkit.getOnlinePlayers()) {
             p.sendTitle("§d§lDRAGON EGG OBTAINED!", "§5" + player.getName() + " got the Egg!", 10, 70, 20);
         }
     }
-}
 
+    public DataManager getDataManager() {
+        return dataManager;
+    }
+}
