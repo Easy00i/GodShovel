@@ -1,0 +1,14 @@
+name: GodShovel
+version: '${project.version}'
+main: com.nedevelopment.godshovel.Main
+api-version: '1.21'
+prefix: GodShovel
+authors: [NotEasyOk]
+description: Advanced custom God Shovel plugin with unique powers and rituals.
+
+commands:
+  giveshovel:
+    description: Gives the God Shovel
+    permission: godshovel.admin
+    usage: /giveshovel [player]
+    
