@@ -31,7 +31,7 @@ public class PassivePowerTask extends BukkitRunnable {
                 double z = 0.6 * Math.sin(t);
                 double y = (t % 15) / 5; // Climbs up and repeats
                 
-                Particle.DustOptions red = new Particle.DustOptions(Color.RED, 1.5f);
+                Particle.DustOptions red = new Particle.DustOptions(Color.RED, 2.0f);
                 player.getWorld().spawnParticle(Particle.DUST, loc.clone().add(x, y, z), 1, red);
 
                 // 2. God Effects (Applied continuously so they clear easily)
