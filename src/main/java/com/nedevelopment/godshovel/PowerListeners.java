@@ -167,7 +167,7 @@ private void executeHammerPower(Player player) {
     // ── Spawn ItemDisplay ──────────────────────────────────────────────────
     final ItemDisplay hammer =
             (ItemDisplay) world.spawnEntity(pivotLoc, EntityType.ITEM_DISPLAY);
-    hammer.setItemStack(new ItemStack(Material.MACE));
+    hammer.setItemStack(new ItemStack(org.bukkit.Material.MACE));
     hammer.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
     hammer.setBillboard(Display.Billboard.FIXED); // never face camera
     hammer.setShadowRadius(0f);
@@ -367,9 +367,8 @@ private void executeHammerPower(Player player) {
                     }
                 }
                 // Heavy netherite-coloured crumble for impact crater feel
-                world.spawnParticle(Particle.BLOCK_CRUMBLE, impLoc,
-                        80, 2.5, 0.5, 2.5, 0.40,
-                        Material.NETHERITE_BLOCK.createBlockData());
+                world.spawnParticle(Particle.BLOCK, impLoc, 80, 2.5, 0.5, 2.5, 0.40, 
+                 org.bukkit.Material.NETHERITE_BLOCK.createBlockData());
 
                 // ── Sink target 4 blocks underground (like hammering a nail) ─
                 if (target.isValid() && !target.isDead()) {
