@@ -1,0 +1,8 @@
+server_data:
+  mace_crafted: false
+  egg_found: false
+# Customization
+settings:
+  beam_radius: 20.0
+  control_time_seconds: 10
+  
