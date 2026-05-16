@@ -99,23 +99,25 @@ public class Main extends JavaPlugin implements Listener {
         }
     }
 
-    // --- GOD SHOVEL CRAFTING RITUAL TRIGGER ---
+        // --- GOD SHOVEL CRAFTING RITUAL TRIGGER (1-TICK DELAY FIXED) ---
     @EventHandler(priority = EventPriority.HIGH)
     public void onGodShovelCraft(CraftItemEvent event) {
         ItemStack result = event.getRecipe().getResult();
         if (ItemManager.isGodShovel(result)) {
-            event.setCancelled(true); // Inventory click cancel taaki direct hath me na aaye
+            event.setCancelled(true); // Inventory click cancel taaki glitch se direct hath me na aaye
             
             Player player = (Player) event.getWhoClicked();
             Location tableLoc = event.getInventory().getLocation();
             
             if (tableLoc != null && tableLoc.getBlock().getType() == Material.CRAFTING_TABLE) {
-                // Crafting matrix items ko clear/consume karne ka safe tareeka
+                // Matrix items ko completely consume/clear karo
                 event.getInventory().clear();
                 player.closeInventory();
                 
-                // Start the 10-second advanced Sculk Shrieker animation ritual
-                CraftingRitual.startRitual(this, player, tableLoc);
+                // 1 Ticker Delay taaki advanced math aur rotation bina lag ke execute ho sakein
+                Bukkit.getScheduler().runTaskLater(this, () -> {
+                    CraftingRitual.startRitual(this, player, tableLoc);
+                }, 1L);
             }
         }
     }
