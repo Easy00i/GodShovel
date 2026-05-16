@@ -204,9 +204,9 @@ private void executeHammerPower(Player player) {
         void applyTransform(float scale, double angle) {
             double cosA = Math.cos(angle);
             double sinA = Math.sin(angle);
-            float tx = (float)( raz * sinA  * SCALE * 0.5);
+            float tx = (float)(-raz * sinA  * SCALE * 0.5);
             float ty = (float)( cosA         * SCALE * 0.5);
-            float tz = (float)(-rax * sinA  * SCALE * 0.5);
+            float tz = (float)( rax * sinA  * SCALE * 0.5);
             Quaternionf rot = (angle < 0.0001)
                     ? new Quaternionf()
                     : new Quaternionf().rotationAxis((float) angle, rax, 0f, raz);
