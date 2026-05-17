@@ -34,7 +34,7 @@ public class ItemManager {
             lore.add(Component.text(" "));
             lore.add(Component.text("Active:").color(NamedTextColor.AQUA).decorate(TextDecoration.BOLD));
             lore.add(Component.text("▶ Shift+Left: Mind Control (10s)").color(NamedTextColor.GRAY));
-            lore.add(Component.text("▶ Shift+Right: Destruction Beam (10s)").color(NamedTextColor.GRAY));
+            lore.add(Component.text("▶ Shift+Right: MeteorRingPower (10s)").color(NamedTextColor.GRAY));
             
             meta.lore(lore);
 
