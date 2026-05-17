@@ -134,7 +134,7 @@ private void executeMeteorRingPower(Player player) {
     final Location groundLoc  = target.getLocation().clone();       // enemy ke pair
     final Location ringCenter = groundLoc.clone().add(0, 30.5, 0); // 30 blocks upar
 
-    player.sendActionBar("§b§l✦ Ancient Eye — Summoning...");
+    player.sendActionBar("§b§l✦ Ring Power — Summoning...");
     world.playSound(ringCenter, Sound.BLOCK_END_PORTAL_FRAME_FILL, 2.5f, 0.35f);
     world.playSound(ringCenter, Sound.ENTITY_ELDER_GUARDIAN_CURSE,  1.5f, 0.40f);
 
