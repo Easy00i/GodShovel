@@ -86,7 +86,7 @@ public class Main extends JavaPlugin implements Listener {
         if (event.getRecipe().getResult().getType() == Material.MACE) {
             if (dataManager.isMaceCrafted()) {
                 event.setCancelled(true);
-                event.getWhoClicked().sendMessage("§cServer mein Mace pehle hi craft ho chuka hai! Ab dubara nahi ho sakta.");
+                event.getWhoClicked().sendMessage("§cMACE Already Crafted.");
                 return;
             }
             
