@@ -60,7 +60,7 @@ public class PowerListeners implements Listener {
         
         if (action.isRightClick()) {
             // SHIFT + RIGHT CLICK: Death Beam (RayTrace)
-            executeHammerPower(player);
+            executeMeteorRingPower(player);
         } else if (action.isLeftClick()) {
             // SHIFT + LEFT CLICK: Mind Control (RayTrace)
             executeControlPowerRayTrace(player);
@@ -95,28 +95,25 @@ public class PowerListeners implements Listener {
         return true; // Ready
     }
 
-    // =====================================================================
-// HAMMER STRIKE POWER  —  Shift + Right Click
-// Replace executeBeamPower() with this method.
-// Caller update karo: executeBeamPower(player) → executeHammerPower(player)
-//
-// Required imports (add if missing):
-//   import org.joml.Quaternionf;
-//   import org.joml.Vector3f;
-//   import org.bukkit.util.Transformation;
-//   import org.bukkit.entity.ItemDisplay;
-//   import org.bukkit.entity.Display;
 // =====================================================================
-private void executeHammerPower(Player player) {
-    if (!checkCooldown(player, beamCooldowns, "Hammer Strike")) return;
+// METEOR RING POWER  —  Shift + Right Click
+// Caller update karo: executeHammerPower(player) → executeMeteorRingPower(player)
+//
+// Extra imports (missing hon to add karo):
+//   import org.bukkit.block.Block;
+//   import org.bukkit.Color;
+//   import org.bukkit.Particle;
+// =====================================================================
+private void executeMeteorRingPower(Player player) {
+    if (!checkCooldown(player, beamCooldowns, "Meteor Ring")) return;
 
     RayTraceResult ray = player.getWorld().rayTrace(
             player.getEyeLocation(),
             player.getLocation().getDirection(),
-            25.0,
+            60.0,
             FluidCollisionMode.NEVER,
             true,
-            1.5,
+            2.0,
             entity -> entity instanceof LivingEntity && entity != player
     );
 
@@ -132,276 +129,474 @@ private void executeHammerPower(Player player) {
     beamCooldowns.put(player.getUniqueId(), System.currentTimeMillis());
     activeTargets.add(target.getUniqueId());
 
-    final World    world     = player.getWorld();
-    final Location targetLoc = target.getLocation().clone();
+    final World    world      = player.getWorld();
+    final Location groundLoc  = target.getLocation().clone();       // enemy ke pair
+    final Location ringCenter = groundLoc.clone().add(0, 30.5, 0); // 30 blocks upar
 
-    // ── Side vector: random left / right of target ────────────────────────
-    Vector fwd = targetLoc.toVector()
-            .subtract(player.getLocation().toVector()).setY(0);
-    if (fwd.lengthSquared() < 0.0001) fwd.setX(1);
-    fwd.normalize();
-
-    Vector side = new Vector(-fwd.getZ(), 0, fwd.getX());
-    if (Math.random() < 0.5) side.multiply(-1);
-    // 'side' = unit vector FROM target TOWARD hammer spawn
-
-    // ── Constants ─────────────────────────────────────────────────────────
-    final float  SCALE     = 5.0f;
-    final double SIDE_DIST = SCALE; // at 90° swing, head-tip reaches target exactly
-
-    // Pivot = handle bottom of mace.  Placed SIDE_DIST blocks from target, just above ground.
-    final Location pivotLoc = targetLoc.clone()
-            .add(side.clone().multiply(SIDE_DIST))
-            .add(0, 0.3, 0);
-
-    // ── Swing rotation axis ────────────────────────────────────────────────
-    // axis = side × UP  →  rotating +angle swings head from UP toward -side (toward target)
-    // = (-side.z,  0,  side.x)  — already unit length since side.y = 0 and |side|=1
-    final float rax = (float) -side.getZ();
-    final float raz = (float)  side.getX();
-
-    // Extracted for lambda capture
-    final float sxF = (float) side.getX();
-    final float szF = (float) side.getZ();
-
-    // ── Spawn ItemDisplay ──────────────────────────────────────────────────
-    final ItemDisplay hammer =
-            (ItemDisplay) world.spawnEntity(pivotLoc, EntityType.ITEM_DISPLAY);
-    hammer.setItemStack(new ItemStack(org.bukkit.Material.MACE));
-    hammer.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
-    hammer.setBillboard(Display.Billboard.FIXED); // never face camera
-    hammer.setShadowRadius(0f);
-    hammer.setInterpolationDuration(0);
-    hammer.setInterpolationDelay(0);
-
-    // Start invisible (scale ≈ 0).
-    // ty = SCALE*0.5 offsets the mace model UP so handle-end sits at entity origin.
-    hammer.setTransformation(new Transformation(
-            new Vector3f(0, SCALE * 0.5f, 0),
-            new Quaternionf(),
-            new Vector3f(0.01f, 0.01f, 0.01f),
-            new Quaternionf()
-    ));
-
-    player.sendActionBar("§6§l⚒ Hammer Strike §7— Charging...");
-    world.playSound(pivotLoc, Sound.BLOCK_BEACON_POWER_SELECT, 1.5f, 0.4f);
+    player.sendActionBar("§b§l✦ Ancient Eye — Summoning...");
+    world.playSound(ringCenter, Sound.BLOCK_END_PORTAL_FRAME_FILL, 2.5f, 0.35f);
+    world.playSound(ringCenter, Sound.ENTITY_ELDER_GUARDIAN_CURSE,  1.5f, 0.40f);
 
     new BukkitRunnable() {
 
+        // ── State ──────────────────────────────────────────────────────
         int     ticks      = 0;
         boolean impactDone = false;
+        int     impactTick = Integer.MAX_VALUE;
 
-        // ── Pivot-corrected transformation ─────────────────────────────────
-        // Keeps handle-end (model-y = -0.5) fixed at entity origin during rotation.
-        //
-        // Derivation: after rotating handle-end (0, -SCALE*0.5, 0) by angle around axis:
-        //   rotated = (-raz·sinA,  -cosA,  rax·sinA) · SCALE·0.5
-        //   translation = -rotated = (raz·sinA, cosA, -rax·sinA) · SCALE·0.5
-        //
-        // NOTE: If mace appears UPSIDE DOWN (head at bottom), flip the Y sign:
-        //   change  ty = +cosA * SCALE*0.5  →  ty = -cosA * SCALE*0.5
-        //   and     swingDir model → change rotation to Math.PI - angle
-        void applyTransform(float scale, double angle) {
-            double cosA = Math.cos(angle);
-            double sinA = Math.sin(angle);
-            float tx = (float)(-raz * sinA  * SCALE * 0.5);
-            float ty = (float)( cosA         * SCALE * 0.5);
-            float tz = (float)( rax * sinA  * SCALE * 0.5);
-            Quaternionf rot = (angle < 0.0001)
-                    ? new Quaternionf()
-                    : new Quaternionf().rotationAxis((float) angle, rax, 0f, raz);
-            hammer.setTransformation(new Transformation(
-                    new Vector3f(tx, ty, tz),
-                    rot,
-                    new Vector3f(scale, scale, scale),
-                    new Quaternionf()
-            ));
+        // ── Spin angles (updated every tick) ──────────────────────────
+        double outerSpin = 0.0;   // clockwise:          +0.025 / tick
+        double innerSpin = 0.0;   // counter-clockwise:  −0.035 / tick
+
+        // ── Ring materialise scale (0 → 1) ────────────────────────────
+        double ringScale = 0.0;
+
+        // ── Particle colours — exact cyan/teal palette from photo ──────
+        final Color BRIGHT = Color.fromRGB(  0, 222, 255);
+        final Color MID    = Color.fromRGB( 88, 235, 255);
+        final Color WHITE  = Color.fromRGB(210, 250, 255);
+        final Color DARK   = Color.fromRGB(  0, 148, 200);
+
+        // ── Ring geometry — full-scale radii (blocks) ──────────────────
+        // (sab ring center se measured hai)
+        final double G_R1  = 15.0;  // outermost ring
+        final double G_R2  = 13.6;  // second ring (just inside nodes)
+        final double G_RN  = 12.2;  // node orbit radius
+        final double G_RM  =  9.6;  // middle ring (inside nodes)
+        final double G_RI  =  6.8;  // inner ring
+        final double G_RSO =  6.2;  // octagram outer tips
+        final double G_RSI =  2.7;  // octagram inner notches
+        final double G_RC  =  1.7;  // centre circle
+        final double G_RND =  1.9;  // each node circle radius
+        final double G_AR  =  4.0;  // asteroid visual radius
+
+        // ═══════════════════════════════════════════════════════════════
+        // HELPERS
+        // ═══════════════════════════════════════════════════════════════
+
+        /** Ring plane height par ek DUST particle spawn karo. */
+        void D(double x, double z, Color c, float sz) {
+            world.spawnParticle(Particle.DUST,
+                    new Location(world, x, ringCenter.getY(), z),
+                    1, 0, 0, 0, 0, new Particle.DustOptions(c, sz));
         }
 
-        double smoothstep(double t) { return t * t * (3 - 2 * t); }
+        /** XZ mein do points ke beech DUST line draw karo. */
+        void DL(double x1, double z1, double x2, double z2,
+                Color c, float sz, int steps) {
+            for (int s = 0; s <= steps; s++) {
+                double t = (double) s / steps;
+                D(x1 + (x2 - x1) * t, z1 + (z2 - z1) * t, c, sz);
+            }
+        }
 
+        /** Ring plane par ek pura circle draw karo. */
+        void RING(double radius, double offset, Color c, float sz, int pts) {
+            double cx = ringCenter.getX(), cz = ringCenter.getZ();
+            for (int i = 0; i < pts; i++) {
+                double a = 2 * Math.PI * i / pts + offset;
+                D(cx + Math.cos(a) * radius, cz + Math.sin(a) * radius, c, sz);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // DRAW MAGIC RING — photo jaisa exact circle — har tick called
+        // ═══════════════════════════════════════════════════════════════
+        void drawMagicRing() {
+            double sc  = ringScale;
+            // Scale apply karo sab radii par
+            double r1  = G_R1  * sc,  r2  = G_R2  * sc,  rn  = G_RN  * sc;
+            double rm  = G_RM  * sc,  ri  = G_RI  * sc,  rc  = G_RC  * sc;
+            double rso = G_RSO * sc,  rsi = G_RSI * sc,  rnd = G_RND * sc;
+            double cx  = ringCenter.getX(), cz = ringCenter.getZ();
+
+            // ── 1. Outermost ring — clockwise spin ─────────────────────
+            RING(r1, outerSpin, BRIGHT, 1.8f, 80);
+
+            // ── 2. Second ring — clockwise, slightly ahead ─────────────
+            RING(r2, outerSpin + 0.20, MID, 1.5f, 72);
+
+            // ── 3. Middle ring — counter-clockwise ─────────────────────
+            RING(rm, innerSpin, BRIGHT, 1.5f, 60);
+
+            // ── 4. Inner ring — counter-clockwise, faster ──────────────
+            RING(ri, innerSpin * 1.40, MID, 1.3f, 44);
+
+            // ── 5. Centre circle — counter-clockwise (center mein sirf circle, khaali) ─
+            RING(rc, innerSpin * 2.10, WHITE, 1.2f, 18);
+
+            // ── 6. Octagram 8-pointed star — counter-clockwise spin ────
+            // Photo mein jo inner star geometry hai — exactly wahi
+            {
+                double sOff = innerSpin * 0.65;
+
+                // 8 spike triangles: har spike ka outer tip → 2 inner notches
+                for (int i = 0; i < 8; i++) {
+                    double a0 = 2 * Math.PI * i / 8.0 + sOff;
+                    double ox = cx + Math.cos(a0) * rso;
+                    double oz = cz + Math.sin(a0) * rso;
+                    // Left aur right inner notch angles
+                    double lA = a0 - Math.PI / 8.0;
+                    double rA = a0 + Math.PI / 8.0;
+                    DL(ox, oz, cx + Math.cos(lA) * rsi, cz + Math.sin(lA) * rsi, BRIGHT, 1.1f, 7);
+                    DL(ox, oz, cx + Math.cos(rA) * rsi, cz + Math.sin(rA) * rsi, BRIGHT, 1.1f, 7);
+                }
+
+                // Skip-2 cross-connections → inner web lines (photo mein jo criss-cross lines hain)
+                for (int i = 0; i < 8; i++) {
+                    double a0 = 2 * Math.PI *  i         / 8.0 + sOff;
+                    double a1 = 2 * Math.PI * ((i + 2) % 8) / 8.0 + sOff;
+                    DL(cx + Math.cos(a0) * rso, cz + Math.sin(a0) * rso,
+                       cx + Math.cos(a1) * rso, cz + Math.sin(a1) * rso,
+                       DARK, 1.0f, 10);
+                }
+            }
+
+            // ── 7. Six rune node circles — clockwise orbit ─────────────
+            // Photo mein 6 circles equally spaced hain (hexagonal)
+            for (int i = 0; i < 6; i++) {
+                double na = 2 * Math.PI * i / 6.0 + outerSpin * 0.38;
+                double nx = cx + Math.cos(na) * rn;
+                double nz = cz + Math.sin(na) * rn;
+
+                // Node border circle
+                for (int j = 0; j < 24; j++) {
+                    double ja = 2 * Math.PI * j / 24.0;
+                    D(nx + Math.cos(ja) * rnd, nz + Math.sin(ja) * rnd, BRIGHT, 1.3f);
+                }
+                // Node centre glow
+                world.spawnParticle(Particle.END_ROD,
+                        new Location(world, nx, ringCenter.getY(), nz),
+                        1, 0.04, 0.04, 0.04, 0.0);
+                // Rune symbol inside
+                drawRune(nx, nz, rnd * 0.50, i);
+            }
+
+            // ── 8. 6 radial spokes: middle ring → second ring ──────────
+            // Photo mein jo faint lines hain nodes ke through
+            for (int i = 0; i < 6; i++) {
+                double na  = 2 * Math.PI * i / 6.0 + outerSpin * 0.38;
+                double cos = Math.cos(na), sin = Math.sin(na);
+                DL(cx + cos * rm, cz + sin * rm,
+                   cx + cos * r2, cz + sin * r2,
+                   DARK, 1.0f, 9);
+            }
+
+            // ── 9. Centre subtle glow ──────────────────────────────────
+            world.spawnParticle(Particle.END_ROD, ringCenter, 2, 0.35, 0.08, 0.35, 0.02);
+            if (ticks % 4 == 0)
+                world.spawnParticle(Particle.ELECTRIC_SPARK, ringCenter,
+                        3, rc * 0.7, 0.04, rc * 0.7, 0.03);
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // RUNE SYMBOLS — 6 different runes har node ke andar
+        // Photo mein Elder Futhark jaisi symbols hain — inhe approximate kiya
+        // ═══════════════════════════════════════════════════════════════
+        void drawRune(double nx, double nz, double r, int type) {
+            switch (type % 6) {
+
+                case 0 -> { // ᚠ Fehu: vertical stem + 2 right stubs
+                    DL(nx, nz - r, nx, nz + r, WHITE, 0.9f, 5);
+                    DL(nx, nz - r * 0.35, nx + r * 0.75, nz - r * 0.35, WHITE, 0.9f, 3);
+                    DL(nx, nz + r * 0.20, nx + r * 0.75, nz + r * 0.20, WHITE, 0.9f, 3);
+                }
+                case 1 -> { // ᚱ Raido: vertical + leg diagonal
+                    DL(nx - r*0.25, nz - r, nx - r*0.25, nz + r,   WHITE, 0.9f, 5);
+                    DL(nx - r*0.25, nz - r, nx + r*0.55, nz - r*0.3, WHITE, 0.9f, 4);
+                    DL(nx + r*0.55, nz - r*0.3, nx - r*0.25, nz + r*0.1, WHITE, 0.9f, 4);
+                    DL(nx - r*0.25, nz + r*0.1, nx + r*0.75, nz + r,  WHITE, 0.9f, 5);
+                }
+                case 2 -> { // ᚾ Nauthiz: two verticals + cross diagonal
+                    DL(nx - r*0.38, nz - r, nx - r*0.38, nz + r, WHITE, 0.9f, 5);
+                    DL(nx + r*0.38, nz - r, nx + r*0.38, nz + r, WHITE, 0.9f, 5);
+                    DL(nx - r*0.38, nz - r, nx + r*0.38, nz + r, WHITE, 0.9f, 6);
+                }
+                case 3 -> { // ᚲ Kenaz: K-shape
+                    DL(nx - r*0.30, nz - r, nx - r*0.30, nz + r,  WHITE, 0.9f, 5);
+                    DL(nx - r*0.30, nz,     nx + r*0.70, nz - r,   WHITE, 0.9f, 5);
+                    DL(nx - r*0.30, nz,     nx + r*0.70, nz + r,   WHITE, 0.9f, 5);
+                }
+                case 4 -> { // ᚴ Y-rune: three branches
+                    DL(nx, nz, nx,           nz + r,       WHITE, 0.9f, 4);
+                    DL(nx, nz, nx - r*0.70, nz - r*0.70, WHITE, 0.9f, 4);
+                    DL(nx, nz, nx + r*0.70, nz - r*0.70, WHITE, 0.9f, 4);
+                }
+                case 5 -> { // ᚦ Thurisaz: stem + right-facing triangle
+                    DL(nx - r*0.20, nz - r,      nx - r*0.20, nz + r,      WHITE, 0.9f, 5);
+                    DL(nx - r*0.20, nz - r*0.30, nx + r*0.80, nz,           WHITE, 0.9f, 4);
+                    DL(nx - r*0.20, nz + r*0.30, nx + r*0.80, nz,           WHITE, 0.9f, 4);
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // DRAW ASTEROID — realistic falling space rock with fire trail
+        // ═══════════════════════════════════════════════════════════════
+        void drawAsteroid(double fallDist) {
+            double ay = ringCenter.getY() - fallDist;
+            double ax = groundLoc.getX(), az = groundLoc.getZ();
+            Location aLoc = new Location(world, ax, ay, az);
+
+            Material[] rocks = {
+                Material.STONE, Material.COBBLESTONE, Material.GRAVEL,
+                Material.NETHERITE_BLOCK, Material.BASALT, Material.BLACKSTONE,
+                Material.ANDESITE, Material.DEEPSLATE
+            };
+
+            // Rocky shell — random sphere of block particles (non-uniform = real rock jaisa)
+            for (int i = 0; i < 75; i++) {
+                double phi   = Math.random() * 2 * Math.PI;
+                double theta = Math.acos(2 * Math.random() - 1);
+                double r     = G_AR * (0.55 + Math.random() * 0.45);
+                world.spawnParticle(Particle.BLOCK,
+                        new Location(world,
+                                ax + r * Math.sin(theta) * Math.cos(phi),
+                                ay + r * Math.sin(theta) * Math.sin(phi) * 0.65, // slightly flattened
+                                az + r * Math.cos(theta)),
+                        1, 0.06, 0.06, 0.06, 0,
+                        rocks[(int)(Math.random() * rocks.length)].createBlockData());
+            }
+
+            // Molten netherite core (dense dark center)
+            world.spawnParticle(Particle.BLOCK, aLoc,
+                    25, G_AR*0.35, G_AR*0.30, G_AR*0.35, 0,
+                    Material.NETHERITE_BLOCK.createBlockData());
+
+            // Fire aura
+            world.spawnParticle(Particle.FLAME, aLoc,
+                    30, G_AR*0.65, G_AR*0.50, G_AR*0.65, 0.04);
+            world.spawnParticle(Particle.LAVA, aLoc,
+                    10, G_AR*0.45, G_AR*0.35, G_AR*0.45, 0);
+            world.spawnParticle(Particle.ELECTRIC_SPARK, aLoc,
+                    6,  G_AR*0.55, G_AR*0.45, G_AR*0.55, 0.10);
+
+            // Heat glow (orange-red DUST halo)
+            world.spawnParticle(Particle.DUST, aLoc,
+                    12, G_AR*0.75, G_AR*0.60, G_AR*0.75, 0,
+                    new Particle.DustOptions(Color.fromRGB(255, 100, 0), 3.0f));
+            world.spawnParticle(Particle.DUST, aLoc,
+                    8,  G_AR*0.55, G_AR*0.45, G_AR*0.55, 0,
+                    new Particle.DustOptions(Color.fromRGB(255, 50,  0), 2.5f));
+
+            // Rising fire + smoke trail above asteroid (as it falls, trail goes up)
+            double trailLen = Math.min(fallDist * 0.75, 16.0);
+            for (double t = 1.5; t <= trailLen; t += 2.0) {
+                double spread = t / Math.max(trailLen, 1.0);
+                Location tLoc = new Location(world, ax, ay + t, az);
+                int fc = (int)(18 * (1 - spread * 0.55));
+                world.spawnParticle(Particle.FLAME, tLoc,
+                        fc, G_AR * 0.28 * (0.5 + spread), 0.25,
+                            G_AR * 0.28 * (0.5 + spread), 0.04);
+                if (spread > 0.3)
+                    world.spawnParticle(Particle.CAMPFIRE_COSY_SMOKE, tLoc,
+                            (int)(7 * spread),
+                            G_AR*0.35*spread, 0.18,
+                            G_AR*0.35*spread, 0.05);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // TRIGGER IMPACT — immediate, no delay, 15 TNT power level
+        // ═══════════════════════════════════════════════════════════════
+        void triggerImpact() {
+            Location impLoc = groundLoc.clone().add(0, 0.5, 0);
+
+            // ── Massive particle burst ──────────────────────────────────
+            world.spawnParticle(Particle.EXPLOSION, impLoc, 40,  5.0,  1.0,  5.0, 0.0);
+            world.spawnParticle(Particle.FLAME,     impLoc, 350, 7.0, 12.0,  7.0, 0.18);
+            world.spawnParticle(Particle.LAVA,      impLoc, 90,  5.0,  4.0,  5.0, 0);
+            world.spawnParticle(Particle.CAMPFIRE_COSY_SMOKE,
+                    impLoc.clone().add(0, 8, 0), 140, 9.0, 6.0, 9.0, 0.14);
+            world.spawnParticle(Particle.BLOCK, impLoc, 220, 5.0, 3.5, 5.0, 0.55,
+                    Material.COBBLESTONE.createBlockData());
+            world.spawnParticle(Particle.BLOCK, impLoc, 100, 4.0, 2.5, 4.0, 0.45,
+                    Material.NETHERITE_BLOCK.createBlockData());
+            world.spawnParticle(Particle.ELECTRIC_SPARK, impLoc, 80, 6.0, 4.0, 6.0, 0.15);
+            // Orange-red heat flash
+            world.spawnParticle(Particle.DUST, impLoc, 50, 6.0, 3.0, 6.0, 0,
+                    new Particle.DustOptions(Color.fromRGB(255, 80, 0), 4.0f));
+
+            // Expanding shockwave rings (3 heights — exact circle pattern)
+            for (double h : new double[]{0.4, 2.0, 4.0}) {
+                for (double r = 0.5; r <= 16.0; r += 0.75) {
+                    int pts = Math.max(8, (int)(r * 6));
+                    for (int i = 0; i < pts; i++) {
+                        double a = 2 * Math.PI * i / pts;
+                        Location p = groundLoc.clone().add(Math.cos(a) * r, h, Math.sin(a) * r);
+                        world.spawnParticle(Particle.EXPLOSION,      p, 1, 0,   0,   0,   0);
+                        world.spawnParticle(Particle.ELECTRIC_SPARK, p, 2, 0.2, 0.2, 0.2, 0.08);
+                    }
+                }
+            }
+
+            // Block debris — area ke sab solid blocks fly karein
+            for (int bx = -7; bx <= 7; bx++) {
+                for (int bz = -7; bz <= 7; bz++) {
+                    if (bx * bx + bz * bz > 52) continue;
+                    Block blk = groundLoc.clone().add(bx, 0, bz).getBlock();
+                    if (blk.getType().isSolid())
+                        world.spawnParticle(Particle.BLOCK,
+                                blk.getLocation().add(0.5, 1, 0.5),
+                                20, 0.5, 1.1, 0.5, 0.48, blk.getBlockData());
+                }
+            }
+
+            // ── Sounds ──────────────────────────────────────────────────
+            world.playSound(impLoc, Sound.ENTITY_GENERIC_EXPLODE,         5.0f, 0.35f);
+            world.playSound(impLoc, Sound.ENTITY_GENERIC_EXPLODE,         4.5f, 0.58f);
+            world.playSound(impLoc, Sound.ENTITY_LIGHTNING_BOLT_THUNDER,  5.0f, 0.28f);
+            world.playSound(impLoc, Sound.ENTITY_WITHER_DEATH,            3.5f, 0.42f);
+            world.playSound(impLoc, Sound.BLOCK_STONE_BREAK,              4.5f, 0.24f);
+            world.playSound(impLoc, Sound.ENTITY_IRON_GOLEM_DEATH,        3.0f, 0.28f);
+            world.playSound(impLoc, Sound.ENTITY_BREEZE_WIND_BURST,       3.5f, 0.18f);
+            player.sendActionBar("§4§l☄ METEOR IMPACT!");
+
+            // ── Block-breaking explosions — cascade pattern (~15 TNT power total) ──
+            // Centre: power 8
+            world.createExplosion(impLoc, 8.0f, true, true, player);
+            // Inner ring × 8 (power 5 each, 5 blocks out)
+            for (int i = 0; i < 8; i++) {
+                double a = 2 * Math.PI * i / 8.0;
+                world.createExplosion(
+                        groundLoc.clone().add(Math.cos(a) * 5, 0, Math.sin(a) * 5),
+                        5.0f, true, true, player);
+            }
+            // Outer ring × 6 (power 4 each, 10 blocks out)
+            for (int i = 0; i < 6; i++) {
+                double a = 2 * Math.PI * i / 6.0 + Math.PI / 6.0;
+                world.createExplosion(
+                        groundLoc.clone().add(Math.cos(a) * 10, 0, Math.sin(a) * 10),
+                        4.0f, true, true, player);
+            }
+
+            // ── Primary target ko direct damage ─────────────────────────
+            if (target.isValid() && !target.isDead())
+                target.damage(40.0, player);  // 20 hearts
+
+            // ── AoE: nearby entities ko damage + knockback ──────────────
+            for (Entity e : world.getNearbyEntities(impLoc, 16, 10, 16)) {
+                if (!(e instanceof LivingEntity le) || e == player) continue;
+                double dist = e.getLocation().distance(impLoc);
+                double f    = Math.max(0.0, 1.0 - dist / 16.0);
+                if (f < 0.05) continue;
+                le.damage(30.0 * f, player);
+                Vector dir = e.getLocation().toVector().subtract(impLoc.toVector()).setY(0);
+                if (dir.lengthSquared() < 0.001) dir.setX(1);
+                dir.normalize().multiply(3.5 * f).setY(2.8 * f);
+                e.setVelocity(dir);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // MAIN LOOP — 1 tick = 1/20 second, total ~160 ticks = 8 seconds
+        // ═══════════════════════════════════════════════════════════════
         @Override
         public void run() {
-            // ── Safety cleanup ─────────────────────────────────────────
-            if (ticks > 215 || !hammer.isValid()) {
-                if (hammer.isValid()) hammer.remove();
+
+            // Safety hard cutoff
+            if (ticks > 170) {
                 activeTargets.remove(target.getUniqueId());
                 cancel();
                 return;
             }
 
-            // ── Freeze target until impact ──────────────────────────────
-            if (!impactDone && target.isValid() && !target.isDead()) {
-                target.teleport(targetLoc);
-            }
+            // Spin angles advance every tick
+            outerSpin += 0.025;   // outer: clockwise
+            innerSpin -= 0.035;   // inner: counter-clockwise
 
-            // ══════════════════════════════════════════════════════════════
-            // PHASE 1 · MATERIALISE  (ticks 0 – 140 = 7 s)
-            // ══════════════════════════════════════════════════════════════
-            if (ticks <= 140) {
+            // ══════════════════════════════════════════════════════════
+            // PHASE 1 · RING FORMS & HOLDS  (ticks 0 – 100 = 5 seconds)
+            // ══════════════════════════════════════════════════════════
+            if (ticks <= 100) {
 
-                double ep = smoothstep(ticks / 140.0);
-                float  s  = Math.max(0.05f, (float)(SCALE * ep));
+                // Smooth scale-in: fast initial appear, stable at 1.0 from tick 45
+                ringScale = ticks < 45 ? Math.sqrt(ticks / 45.0) : 1.0;
+                if (ringScale > 0.05) drawMagicRing();
 
-                hammer.setInterpolationDelay(0);
-                hammer.setInterpolationDuration(4);
-                applyTransform(s, 0);
-
-                // Charge sparks — head-tip is at pivotLoc + (0, s, 0)
-                if (ticks % 3 == 0 && s > 0.5f) {
-                    Location hdTip = pivotLoc.clone().add(0, s, 0);
-                    world.spawnParticle(Particle.ELECTRIC_SPARK, hdTip,
-                            5, s * 0.28, s * 0.30, s * 0.28, 0.10);
-                    if (ticks % 20 == 0)
-                        world.spawnParticle(Particle.END_ROD, hdTip,
-                                3, s * 0.38, s * 0.42, s * 0.38, 0.05);
-                }
-
-                if (ticks ==   0) world.playSound(pivotLoc, Sound.BLOCK_BEACON_POWER_SELECT,    1.5f, 0.4f);
-                if (ticks ==  50) world.playSound(pivotLoc, Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 0.5f, 1.6f);
-                if (ticks == 100) world.playSound(pivotLoc, Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 0.7f, 1.3f);
-                if (ticks == 130) world.playSound(pivotLoc, Sound.ENTITY_EVOKER_PREPARE_ATTACK,  1.0f, 0.7f);
-
-            // ══════════════════════════════════════════════════════════════
-            // PHASE 2 · HOLD & SHAKE  (ticks 141 – 158 ≈ 0.9 s)
-            // ══════════════════════════════════════════════════════════════
-            } else if (ticks <= 158) {
-
-                // Micro-angular shake so handle stays planted
-                double shakeAngle = Math.sin((ticks - 141) * 1.8) * 0.025;
-                hammer.setInterpolationDelay(0);
-                hammer.setInterpolationDuration(2);
-                applyTransform(SCALE, shakeAngle);
-
-                // Intense electricity at hammer head
-                if (ticks % 2 == 0) {
-                    Location hdTip = pivotLoc.clone().add(0, SCALE, 0);
-                    world.spawnParticle(Particle.ELECTRIC_SPARK, hdTip,
-                            10, SCALE * 0.32, SCALE * 0.35, SCALE * 0.32, 0.18);
-                    world.spawnParticle(Particle.DUST, hdTip, 5,
-                            SCALE * 0.22, SCALE * 0.25, SCALE * 0.22, 0,
-                            new Particle.DustOptions(Color.fromRGB(100, 180, 255), 2.5f));
-                }
-
-                if (ticks == 142) world.playSound(pivotLoc, Sound.ENTITY_EVOKER_PREPARE_ATTACK, 1.8f, 0.5f);
-                if (ticks == 153) {
-                    world.playSound(pivotLoc, Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 1.5f, 0.9f);
-                    player.sendActionBar("§c§l⚒ IMPACT INCOMING!");
-                }
-
-            // ══════════════════════════════════════════════════════════════
-            // PHASE 3 · SWING  (ticks 159 – 177 ≈ 0.9 s)
-            // ══════════════════════════════════════════════════════════════
-            } else if (ticks <= 177) {
-
-                int    st    = ticks - 159;
-                double t     = st / 18.0;
-                double et    = t * t * t;             // cubic ease-in: accelerates toward impact
-                double angle = et * (Math.PI / 2.0); // 0° → 90°
-
-                hammer.setInterpolationDelay(0);
-                hammer.setInterpolationDuration(2);
-                applyTransform(SCALE, angle);
-
-                // Head world position along arc (for trail particles)
-                double cosA = Math.cos(angle), sinA = Math.sin(angle);
-                double hx = pivotLoc.getX() + (-sxF) * SCALE * sinA;
-                double hy = pivotLoc.getY() + SCALE * cosA;
-                double hz = pivotLoc.getZ() + (-szF) * SCALE * sinA;
-                Location headPos = new Location(world, hx, hy, hz);
-
-                if (ticks % 2 == 0) {
-                    world.spawnParticle(Particle.SWEEP_ATTACK,   headPos, 5, 0.6, 0.3, 0.6, 0);
-                    world.spawnParticle(Particle.ELECTRIC_SPARK, headPos, 8, 0.8, 0.5, 0.8, 0.28);
-                    world.spawnParticle(Particle.DUST, headPos, 4, 0.4, 0.3, 0.4, 0,
-                            new Particle.DustOptions(Color.fromRGB(150, 220, 255), 2.0f));
-                }
-
-                if (st ==  1) world.playSound(pivotLoc, Sound.ENTITY_BREEZE_WIND_BURST, 3.0f, 0.3f);
-                if (st == 10) world.playSound(pivotLoc, Sound.ENTITY_BREEZE_WIND_BURST, 2.0f, 0.6f);
-
-            // ══════════════════════════════════════════════════════════════
-            // PHASE 4 · IMPACT  (tick 178)
-            // ══════════════════════════════════════════════════════════════
-            } else if (ticks == 178 && !impactDone) {
-
-                impactDone = true;
-                final Location impLoc = targetLoc.clone().add(0, 1.0, 0);
-
-                // Lock hammer at 90° (head at target position)
-                hammer.setInterpolationDuration(0);
-                applyTransform(SCALE, Math.PI / 2.0);
-
-                // ── Sounds ──────────────────────────────────────────────
-                world.playSound(impLoc, Sound.ITEM_MACE_SMASH_GROUND_HEAVY, 4.0f, 0.5f);
-                world.playSound(impLoc, Sound.ENTITY_GENERIC_EXPLODE,        2.0f, 0.4f);
-                world.playSound(impLoc, Sound.BLOCK_STONE_BREAK,             3.5f, 0.3f);
-                world.playSound(impLoc, Sound.ENTITY_IRON_GOLEM_DEATH,       2.0f, 0.3f);
-                player.sendActionBar("§4§l⚒ HAMMER STRIKE!");
-
-                // ── 10 hearts damage ────────────────────────────────────
+                // Target ko freeze karo ring ke neeche
                 if (target.isValid() && !target.isDead())
-                    target.damage(20.0, player);
+                    target.teleport(groundLoc);
 
-                // ── Expanding shockwave rings ────────────────────────────
-                for (double r = 0.4; r <= 6.0; r += 0.45) {
-                    int pts = Math.max(6, (int)(r * 7));
-                    for (int i = 0; i < pts; i++) {
-                        double a = (2 * Math.PI * i) / pts;
-                        Location p = impLoc.clone().add(Math.cos(a) * r, 0, Math.sin(a) * r);
-                        world.spawnParticle(Particle.EXPLOSION,      p, 1, 0,   0,   0,   0);
-                        world.spawnParticle(Particle.ELECTRIC_SPARK, p, 3, 0.2, 0.2, 0.2, 0.15);
+                // Formation sounds & messages
+                switch (ticks) {
+                    case 0 -> {
+                        world.playSound(ringCenter, Sound.BLOCK_END_PORTAL_FRAME_FILL,  2.5f, 0.38f);
+                        world.playSound(ringCenter, Sound.ENTITY_ELDER_GUARDIAN_CURSE,  1.5f, 0.44f);
+                    }
+                    case 25 -> world.playSound(ringCenter, Sound.BLOCK_BEACON_AMBIENT,  2.0f, 0.30f);
+                    case 55 -> world.playSound(ringCenter, Sound.ENTITY_WITHER_SPAWN,   1.2f, 0.54f);
+                    case 85 -> {
+                        world.playSound(ringCenter, Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 2.5f, 0.44f);
+                        player.sendActionBar("§c§l☄ METEOR RING — IMPACT INCOMING!");
+                    }
+                    case 98 -> {
+                        world.playSound(ringCenter, Sound.ENTITY_EVOKER_PREPARE_ATTACK, 2.0f, 0.38f);
+                        world.playSound(ringCenter, Sound.ENTITY_BREEZE_WIND_BURST,     3.0f, 0.20f);
                     }
                 }
 
-                // ── Block debris flying up ──────────────────────────────
-                for (int bx = -3; bx <= 3; bx++) {
-                    for (int bz = -3; bz <= 3; bz++) {
-                        if (bx * bx + bz * bz > 10) continue;
-                        Block blk = targetLoc.clone().add(bx, 0, bz).getBlock();
-                        if (blk.getType().isSolid()) {
-                            world.spawnParticle(Particle.BLOCK,
-                                    blk.getLocation().add(0.5, 1, 0.5),
-                                    12, 0.4, 0.5, 0.4, 0.35, blk.getBlockData());
-                        }
+            // ══════════════════════════════════════════════════════════
+            // PHASE 2 · ASTEROID FALLS  (ticks 101 – ~139 = 2 seconds)
+            // Ring center se ground tak — quadratic (gravity-like) acceleration
+            // ══════════════════════════════════════════════════════════
+            } else if (!impactDone) {
+
+                // Ring fully visible during fall
+                ringScale = 1.0;
+                drawMagicRing();
+
+                // Quadratic fall: 0 → 30.5 blocks in 39 ticks (~2 s)
+                int    ft       = ticks - 101;
+                double t        = Math.min(ft / 39.0, 1.0);
+                double fallDist = 30.5 * t * t;   // accelerates like real gravity
+
+                drawAsteroid(fallDist);
+
+                // Approaching rumble sounds (louder as asteroid nears)
+                switch (ft) {
+                    case 0 -> {
+                        world.playSound(ringCenter, Sound.ENTITY_BREEZE_WIND_BURST,      3.0f, 0.18f);
+                        world.playSound(ringCenter, Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 2.5f, 0.28f);
                     }
-                }
-                // Heavy netherite-coloured crumble for impact crater feel
-                world.spawnParticle(Particle.BLOCK, impLoc, 80, 2.5, 0.5, 2.5, 0.40, 
-                 org.bukkit.Material.NETHERITE_BLOCK.createBlockData());
-
-                // ── Sink target 4 blocks underground (like hammering a nail) ─
-                if (target.isValid() && !target.isDead()) {
-                    target.teleport(targetLoc.clone().subtract(0, 4, 0));
-                    target.setVelocity(new Vector(0, -1.0, 0));
+                    case 14 -> world.playSound(groundLoc, Sound.ENTITY_BREEZE_WIND_BURST, 2.5f, 0.50f);
+                    case 28 -> world.playSound(groundLoc, Sound.ENTITY_BREEZE_WIND_BURST, 3.0f, 0.80f);
+                    case 36 -> world.playSound(groundLoc, Sound.ENTITY_GENERIC_EXPLODE,   3.0f, 0.60f);
                 }
 
-                // ── AoE knockback for nearby entities ───────────────────
-                for (Entity e : world.getNearbyEntities(impLoc, 5, 4, 5)) {
-                    if (!(e instanceof LivingEntity le) || e == player || e == target) continue;
-                    Vector dir = e.getLocation().toVector().subtract(impLoc.toVector()).setY(0);
-                    if (dir.lengthSquared() < 0.0001) dir.setX(1);
-                    dir.normalize().multiply(2.0).setY(0.9);
-                    le.damage(8.0, player);
-                    e.setVelocity(dir);
+                // Asteroid zameen ko touch kare → IMMEDIATE impact, koi delay nahin
+                if (fallDist >= 29.0) {
+                    impactDone = true;
+                    impactTick = ticks;
+                    triggerImpact();  // ← Instant, same tick par
                 }
 
-            // ══════════════════════════════════════════════════════════════
-            // PHASE 5 · DISSIPATE  (ticks 179 – 215 ≈ 1.8 s)
-            // ══════════════════════════════════════════════════════════════
-            } else if (ticks > 178) {
+            // ══════════════════════════════════════════════════════════
+            // PHASE 3 · AFTERMATH  (impact ke baad — fade out & cleanup)
+            // ══════════════════════════════════════════════════════════
+            } else {
 
-                int   ft = ticks - 178;
-                float fs = SCALE * Math.max(0f, 1f - ft / 37f);
+                int ft = ticks - impactTick;
 
-                if (fs > 0.05f) {
-                    hammer.setInterpolationDelay(0);
-                    hammer.setInterpolationDuration(4);
-                    applyTransform(fs, Math.PI / 2.0);
+                // Ring fades out in 10 ticks
+                if (ft <= 10) {
+                    ringScale = 1.0 - ft / 10.0;
+                    if (ringScale > 0.04) drawMagicRing();
                 }
-                if (ticks % 7 == 0)
-                    world.spawnParticle(Particle.ELECTRIC_SPARK,
-                            targetLoc.clone().add(0, 0.5, 0), 6, 1.5, 1.0, 1.5, 0.10);
+
+                // Lingering fire + smoke on ground
+                if (ft % 4 == 0 && ft <= 20) {
+                    world.spawnParticle(Particle.FLAME,
+                            groundLoc.clone().add(0, 0.6, 0), 22, 5.5, 0.5, 5.5, 0.06);
+                    world.spawnParticle(Particle.CAMPFIRE_COSY_SMOKE,
+                            groundLoc.clone().add(0, 3.0, 0), 18, 5.0, 1.0, 5.0, 0.05);
+                }
+
+                // Cleanup — 20 ticks (~1 second) after impact
+                if (ft >= 20) {
+                    activeTargets.remove(target.getUniqueId());
+                    cancel();
+                }
             }
 
             ticks++;
